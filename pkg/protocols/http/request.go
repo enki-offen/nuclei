@@ -268,7 +268,6 @@ func (request *Request) executeParallelHTTP(input *contextargs.Context, dynamicV
 					spmHandler.Release()
 					continue
 				}
-				request.options.RateLimitTake()
 				hasInteractMatchers := interactsh.HasMatchers(request.CompiledOperators)
 				needsRequestEvent := hasInteractMatchers && request.NeedsRequestCondition()
 				select {
@@ -533,8 +532,6 @@ func (request *Request) ExecuteWithResults(input *contextargs.Context, dynamicVa
 		executeFunc := func(data string, payloads, dynamicValue map[string]interface{}) (bool, error) {
 			hasInteractMatchers := interactsh.HasMatchers(request.CompiledOperators)
 
-			request.options.RateLimitTake()
-
 			ctx := request.newContext(input)
 			ctxWithTimeout, cancel := context.WithTimeoutCause(ctx, request.options.Options.GetTimeouts().HttpTimeout, ErrHttpEngineRequestDeadline)
 			defer cancel()
@@ -750,6 +747,16 @@ func (request *Request) executeRequest(input *contextargs.Context, generatedRequ
 				return ErrMissingVars
 			}
 		}
+	}
+
+	// Take a rate-limit token only now that the request passed variable
+	// resolution and will actually be sent — skipped requests return
+	// ErrMissingVars above and must not consume the global throttle.
+	// Race-condition templates intentionally bypass the rate limit so their
+	// concurrent burst can trigger the race (upstream never called
+	// RateLimitTake on the race path).
+	if !generatedRequest.original.Race {
+		request.options.RateLimitTake()
 	}
 
 	// === apply auth strategies ===
